@@ -1,0 +1,25 @@
+Klebanoff0606T1 v.0.1.3 (2022-02-09)
+====================================
+
+* removed dependencies on `ABCUtilities` and `scABC2`
+
+Klebanoff0606T1 v.0.1.2 (2021-07-14)
+====================================
+
+* updated use of `scABC2::make_long_dt()` in `tgrams.R` to reflect that function's change of parameter names (genes --> features)
+
+Klebanoff0606T1 v.0.1.1 (2020-04-15)
+====================================
+
+* added list of clonotypes of interest (`cdrs0606T1`)
+* re-worked the addition of the clonotype ID and clonotype frequency calculation
+because I had formerly neglected to take into account the doublet removal
+from sce.shared, i.e. the clonotype counts weren't reflecting the cell numbers
+after that filtering step
+* added additional entry to colData: `fit_for_test` that assesses whether a
+given clonotype has sufficient cells in *both* conditions to be used for a
+t-test
+* `add_frequencies()` now allows to specify what type of feature should be counted
+(sensibly, cdr3s_aa or id)
+* `abbreviations_of_clonotypes.Rmd` has been removed as it is now part of the first
+vignette (01_FilteringAndProcessing.Rmd)

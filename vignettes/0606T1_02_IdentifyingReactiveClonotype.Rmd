@@ -1,0 +1,177 @@
+---
+title: "2. Identifying most reactive clonotype from patient 0606T1"
+author: "Friederike Dündar"
+date: "April 6, updated `r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    code_folding: hide
+    theme: yeti
+    highlight: tango
+vignette: >
+  %\VignetteIndexEntry{2. Identifying most reactive clonotype from patient 0606T1}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  eval=TRUE, cache=TRUE
+)
+```
+```{r libraries, message=FALSE, warning=FALSE, cache=FALSE}
+library(data.table)
+library(magrittr)
+library(SingleCellExperiment)  
+library(ggplot2); theme_set(theme_bw(base_size = 16) )
+library(ggrepel)
+library(patchwork)
+library(Klebanoff0606T1)
+```
+
+
+```{r}
+#sce.filt <- readRDS(file = "/Users/frd2007/Documents/Projects/2018-10_Smita/data/sce_0606T1_clonotypefiltered.rds")
+sce.filt <- load_0606T1filt()
+```
+
+
+# Identifying *IFNg* threshold
+
+```{r }
+markers <- c("IFNG", "TNF", "IL2") #"TNFRSF4", #"TNFRSF9") 
+mks.dt <- scABC2::make_long_dt(sce.filt, exprs_values = "logcounts",
+  genes = markers, include_metaData=c("cluster", "Sample",
+    "cdr3s_aa","freq_per_Sample", "numTRA","numTRB"))
+mks.dt$gene_name <- factor(mks.dt$gene_name, levels = markers, ordered = TRUE)
+#mks.dt <- mks.dt[logcounts > 0]
+```
+
+```{r activation_marker_expression, fig.width = 12, fig.height = 9}
+ggplot(mks.dt, 
+  aes(x = cluster, y = logcounts, color = freq_per_Sample)) +  
+  geom_violin() +
+  ggbeeswarm::geom_quasirandom(size =1) +
+  facet_wrap(~gene_name) +
+  facet_grid(Sample~gene_name) +
+  theme(legend.position = "bottom") +
+  scale_color_viridis_c()
+```
+
+```{r ifng_threshold, fig.width = 5, fig.height = 6}
+ggplot(mks.dt[gene_name == "IFNG"], 
+  aes(x = cluster, y = logcounts, color = freq_per_Sample)) +  
+  geom_violin() +
+  ggbeeswarm::geom_quasirandom(size =1) +
+  facet_wrap(~gene_name) +
+  geom_hline(yintercept=5.6, linetype = "dashed") +
+  facet_grid(Sample~gene_name) +
+  theme(legend.position = "bottom") +
+  scale_color_viridis_c()
+```
+
+5.6 is probably still a justifyable cut-off for IFNg expression.
+
+# Identifying most reactive clonotype
+
+To select the best candidate, we're going to **compare the median expression of IFNg**.
+
+Extracting clonotypes of cells with IFNg above 5.6:
+
+```{r}
+cdr3s_aa_list <- unique(subset(mks.dt, gene_name == "IFNG" & logcounts > 5.6)$cdr3s_aa)
+```
+
+Assess the number of cells with the respective clonotypes:
+
+```{r clonotype_frequencies, fig.width = 12, fig.height = 8, fig.show = "hold"}
+mks.dt[ cdr3s_aa %in% cdr3s_aa_list, .N, by = c("Sample","cdr3s_aa")] %>%
+  ggplot(., aes(x = cdr3s_aa, y = N, fill = Sample)) + 
+  geom_bar(stat = "identity", position = position_dodge()) +
+  coord_flip() +
+  theme(legend.position = "bottom") +
+  scale_fill_manual(values = c("lightskyblue1", "limegreen")) +
+  ggtitle("Frequencies of CDRs of cells with IFNg > 5.6") +
+  ylab("# cells")
+ # geom_hline(yintercept = 10, linetype = "dashed")
+```
+
+Compared to 21LT2, there are relatively few different clonotypes that meet that IFNG cutoff. But we need to focus on those that are found in both conditions.
+
+```{r}
+## only keep clonotypes that are found in MUT and WT cells
+freq_cells <- mks.dt[ cdr3s_aa %in% cdr3s_aa_list, .N, by = c("cdr3s_aa", "Sample")] %>% dcast(., cdr3s_aa ~ Sample, value.var = "N") %>% .[ !(is.na(MUT.0606T1) | is.na(WT.0606T1))] %>% .$cdr3s_aa
+```
+
+
+```{r results='asis',eval=FALSE}
+strsplit(freq_cells, ";") %>% unlist %>% grep("TRA", value=TRUE, .) %>% 
+  table %>% as.data.frame %>% my_table(.)
+```
+
+```{r results='asis', eval=FALSE}
+strsplit(freq_cells, ";") %>% unlist %>% grep("TRB", value=TRUE, .) %>% 
+  table %>% as.data.frame %>% my_table(.)
+```
+
+All TRB and TRA sequences are unique, which is additional evidence for the observation that this dataset's V(D)J sequencing worked more cleanly than the previous sample.
+
+```{r}
+med_ifng <- mks.dt[gene_name == "IFNG" & cdr3s_aa %in% freq_cells,
+                   median(logcounts, na.rm = TRUE),
+                   by = c("Sample","cdr3s_aa")] %>%
+  dcast(.,  cdr3s_aa~Sample, value.var = "V1") 
+med_ifng[is.na(MUT.0606T1), MUT.0606T1 := 0]
+med_ifng[is.na(WT.0606T1), WT.0606T1 := 0]
+med_ifng[, delta_MUT_WT := MUT.0606T1-WT.0606T1]
+setorder(med_ifng, -delta_MUT_WT)
+```
+
+```{r table1, results='asis', cache=FALSE}
+knitr::kable(as.data.frame(med_ifng))
+```
+
+If we include zeros, the winner here is clear: `TRB:CASSLVAETYEQYF`.
+``TRB:CSARLNIQYF` is falling way behind here because of its two zero counts, which is good.
+
+```{r activation_markers_in_Ifng_high_cells, fig.height = 19, fig.width = 9, warning = FALSE, fig.show = "hold"}
+mks.dt[cdr3s_aa %in% freq_cells & gene_name == "IFNG"] %>% 
+  .[med_ifng, on = "cdr3s_aa"] %>%
+  ggplot(.,  aes(x = Sample, y = logcounts)) +  
+  geom_violin(aes(color = Sample)) +
+  ggbeeswarm::geom_quasirandom(size =3.5, groupOnX = TRUE, shape = 21, aes(fill = delta_MUT_WT)) +
+  xlab("") + ylab("IFNG logcounts") + 
+  facet_wrap(~cdr3s_aa, ncol = 2) +
+  theme(legend.position = "bottom") +
+  scale_fill_gradient2(low = "grey65", mid = "white", high = "firebrick3") + coord_cartesian(ylim = c(0,10)) +
+  scale_color_manual(values = c("lightskyblue1","limegreen"))
+```
+
+Based on this figure, I would say that `TRB:CASSLVAETYEQYF` is the winner. 
+
+Let's double check with the other activation markers:
+
+```{r activation_markers_in_Ifng_high_cells3, fig.height = 13, fig.width = 10, warning = FALSE, fig.show = "hold"}
+mks.dt[grepl("CASSLVAETYEQYF|CSARLNIQYF", cdr3s_aa)] %>% 
+  med_ifng[., on = "cdr3s_aa"] %>%
+  ggplot(.,  aes(x = Sample, y = logcounts)) +  
+  geom_violin(aes(color = Sample)) +
+  ggbeeswarm::geom_quasirandom(size =3.5, groupOnX = TRUE, shape = 21, aes(fill = delta_MUT_WT)) +
+  xlab("") + ylab("logcounts") +
+  facet_grid(cdr3s_aa~gene_name) +
+  theme(legend.position = "bottom") +
+  scale_fill_gradient2(low = "grey65", mid = "white", high = "firebrick3") + coord_cartesian(ylim = c(0,10)) +
+  ggtitle("Additional activation markers") +
+  scale_color_manual(values = c("lightskyblue1","limegreen"))
+```
+
+------------
+
+```{r}
+sessionInfo()
+```
+
